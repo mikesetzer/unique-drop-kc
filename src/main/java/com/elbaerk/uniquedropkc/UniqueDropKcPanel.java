@@ -116,6 +116,19 @@ class UniqueDropKcPanel extends PluginPanel
 		return section;
 	}
 
+	private static String escapeHtml(String value)
+	{
+		if (value == null || value.isEmpty())
+		{
+			return "";
+		}
+		return value
+			.replace("&", "&amp;")
+			.replace("<", "&lt;")
+			.replace(">", "&gt;")
+			.replace("\"", "&quot;");
+	}
+
 	private JPanel buildItemSlot(UniqueDropRecord record)
 	{
 		JPanel slot = new JPanel(new BorderLayout());
@@ -127,10 +140,10 @@ class UniqueDropKcPanel extends PluginPanel
 		icon.setVerticalAlignment(SwingConstants.CENTER);
 
 		String tip = UniqueDropKcStore.formatTooltipLine(record.getReceivedAtKcs());
-		String html = "<html>" + record.getItemName();
+		String html = "<html>" + escapeHtml(record.getItemName());
 		if (tip != null)
 		{
-			html += "<br>" + tip;
+			html += "<br>" + escapeHtml(tip);
 		}
 		html += "</html>";
 		icon.setToolTipText(html);

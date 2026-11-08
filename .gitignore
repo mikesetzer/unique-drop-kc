@@ -9,3 +9,4 @@ nb-configuration.xml
 nbproject/
 _ids.txt
 _extract_ids.py
+collection-log-item-ids.md

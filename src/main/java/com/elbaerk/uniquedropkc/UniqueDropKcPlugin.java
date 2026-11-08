@@ -12,6 +12,7 @@ import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.events.ProfileChanged;
+import net.runelite.client.events.RuneScapeProfileChanged;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.ItemStack;
 import net.runelite.client.plugins.Plugin;
@@ -79,6 +80,7 @@ public class UniqueDropKcPlugin extends Plugin
 			clientToolbar.addNavigation(navButton);
 		}
 
+		store.purgeLegacyItemNames();
 		refreshPanel();
 	}
 
@@ -100,6 +102,15 @@ public class UniqueDropKcPlugin extends Plugin
 	@Subscribe
 	public void onProfileChanged(ProfileChanged event)
 	{
+		store.clearCache();
+		refreshPanel();
+	}
+
+	@Subscribe
+	public void onRuneScapeProfileChanged(RuneScapeProfileChanged event)
+	{
+		// Different OSRS accounts share a RuneLite profile but have separate RS-profile config.
+		store.clearCache();
 		refreshPanel();
 	}
 
@@ -154,9 +165,10 @@ public class UniqueDropKcPlugin extends Plugin
 			{
 				continue;
 			}
-			String itemName = itemManager.getItemComposition(id).getName();
-			store.recordDrop(type, name, id, itemName, kc);
-			stamped++;
+			if (store.recordDrop(type, name, id, kc))
+			{
+				stamped++;
+			}
 		}
 		return stamped;
 	}

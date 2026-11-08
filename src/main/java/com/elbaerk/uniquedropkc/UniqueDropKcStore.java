@@ -1,9 +1,11 @@
 package com.elbaerk.uniquedropkc;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonParseException;
 import com.google.gson.reflect.TypeToken;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -11,9 +13,12 @@ import java.util.Map;
 import java.util.Set;
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import lombok.extern.slf4j.Slf4j;
 import net.runelite.client.config.ConfigManager;
+import net.runelite.client.game.ItemManager;
 import net.runelite.http.api.loottracker.LootRecordType;
 
+@Slf4j
 @Singleton
 class UniqueDropKcStore
 {
@@ -28,72 +33,114 @@ class UniqueDropKcStore
 	}.getType();
 
 	private final ConfigManager configManager;
+	private final ItemManager itemManager;
 	private final Gson gson;
 
+	private final Object lock = new Object();
+	private List<String> indexCache;
+	private final Map<String, Map<Integer, int[]>> historyCache = new HashMap<>();
+
 	@Inject
-	UniqueDropKcStore(ConfigManager configManager, Gson gson)
+	UniqueDropKcStore(ConfigManager configManager, ItemManager itemManager, Gson gson)
 	{
 		this.configManager = configManager;
+		this.itemManager = itemManager;
 		this.gson = gson;
 	}
 
-	int[] recordDrop(LootRecordType type, String sourceName, int itemId, String itemName, int kc)
+	/**
+	 * Clears in-memory caches (e.g. after profile changes).
+	 */
+	void clearCache()
 	{
-		Map<Integer, int[]> map = loadSourceMap(type, sourceName);
-		int[] updated = prepend(map.get(itemId), kc);
-		map.put(itemId, updated);
-		saveSourceMap(type, sourceName, map);
-		if (itemName != null && !itemName.isEmpty())
+		synchronized (lock)
 		{
-			configManager.setRSProfileConfiguration(UniqueDropKcConfig.GROUP, nameKey(itemId), itemName);
+			indexCache = null;
+			historyCache.clear();
 		}
-		return updated;
+	}
+
+	/**
+	 * Removes legacy per-item name keys previously persisted for display.
+	 * Names are resolved from {@link ItemManager} at UI time instead.
+	 */
+	void purgeLegacyItemNames()
+	{
+		synchronized (lock)
+		{
+			for (String sourceKey : loadIndex())
+			{
+				ParsedSource parsed = parseSourceKey(sourceKey);
+				if (parsed == null)
+				{
+					continue;
+				}
+				for (Integer itemId : loadSourceMap(parsed.type, parsed.name).keySet())
+				{
+					configManager.unsetRSProfileConfiguration(UniqueDropKcConfig.GROUP, nameKey(itemId));
+				}
+			}
+		}
+	}
+
+	/**
+	 * @return true if a new KC stamp was recorded (false when unchanged / duplicate consecutive KC)
+	 */
+	boolean recordDrop(LootRecordType type, String sourceName, int itemId, int kc)
+	{
+		synchronized (lock)
+		{
+			Map<Integer, int[]> map = loadSourceMap(type, sourceName);
+			int[] existing = map.get(itemId);
+			int[] updated = prepend(existing, kc);
+			if (updated == existing)
+			{
+				return false;
+			}
+
+			map.put(itemId, updated);
+			saveSourceMap(type, sourceName, map);
+			return true;
+		}
 	}
 
 	List<UniqueDropRecord> listAll()
 	{
-		List<UniqueDropRecord> out = new ArrayList<>();
-		String indexJson = configManager.getRSProfileConfiguration(UniqueDropKcConfig.GROUP, "index");
-		if (indexJson == null || indexJson.isEmpty())
+		synchronized (lock)
 		{
-			return out;
-		}
-
-		List<String> index = gson.fromJson(indexJson, INDEX_TYPE);
-		if (index == null)
-		{
-			return out;
-		}
-
-		for (String sourceKey : index)
-		{
-			ParsedSource parsed = parseSourceKey(sourceKey);
-			if (parsed == null)
+			List<UniqueDropRecord> out = new ArrayList<>();
+			List<String> index = loadIndex();
+			if (index.isEmpty())
 			{
-				continue;
+				return out;
 			}
-			Map<Integer, int[]> map = loadSourceMap(parsed.type, parsed.name);
-			for (Map.Entry<Integer, int[]> e : map.entrySet())
+
+			for (String sourceKey : index)
 			{
-				String itemName = configManager.getRSProfileConfiguration(UniqueDropKcConfig.GROUP, nameKey(e.getKey()));
-				if (itemName == null)
+				ParsedSource parsed = parseSourceKey(sourceKey);
+				if (parsed == null)
 				{
-					itemName = "Item " + e.getKey();
+					continue;
 				}
-				out.add(new UniqueDropRecord(parsed.type, parsed.name, e.getKey(), itemName, e.getValue()));
+				Map<Integer, int[]> map = loadSourceMap(parsed.type, parsed.name);
+				for (Map.Entry<Integer, int[]> e : map.entrySet())
+				{
+					int itemId = e.getKey();
+					out.add(new UniqueDropRecord(parsed.type, parsed.name, itemId, resolveItemName(itemId), e.getValue()));
+				}
 			}
-		}
 
-		out.sort((a, b) ->
-		{
-			int c = a.getSourceName().compareToIgnoreCase(b.getSourceName());
-			if (c != 0)
+			out.sort((a, b) ->
 			{
-				return c;
-			}
-			return a.getItemName().compareToIgnoreCase(b.getItemName());
-		});
-		return out;
+				int c = a.getSourceName().compareToIgnoreCase(b.getSourceName());
+				if (c != 0)
+				{
+					return c;
+				}
+				return a.getItemName().compareToIgnoreCase(b.getItemName());
+			});
+			return out;
+		}
 	}
 
 	/** Prepends kc newest-first; skips when kc equals the current head. Caps at {@link #MAX_ENTRIES}. */
@@ -135,46 +182,103 @@ class UniqueDropKcStore
 		return sb.toString();
 	}
 
+	private String resolveItemName(int itemId)
+	{
+		try
+		{
+			String name = itemManager.getItemComposition(itemId).getName();
+			if (name != null && !name.isEmpty())
+			{
+				return name;
+			}
+		}
+		catch (RuntimeException ex)
+		{
+			log.debug("Unable to resolve item name for id {}", itemId, ex);
+		}
+		return "Item " + itemId;
+	}
+
 	private Map<Integer, int[]> loadSourceMap(LootRecordType type, String sourceName)
 	{
-		String json = configManager.getRSProfileConfiguration(UniqueDropKcConfig.GROUP, historyKey(type, sourceName));
-		if (json == null || json.isEmpty())
+		String key = historyKey(type, sourceName);
+		Map<Integer, int[]> cached = historyCache.get(key);
+		if (cached != null)
 		{
-			return new LinkedHashMap<>();
+			return cached;
 		}
-		Map<Integer, int[]> map = gson.fromJson(json, HISTORY_TYPE);
-		return map == null ? new LinkedHashMap<>() : new LinkedHashMap<>(map);
+
+		String json = configManager.getRSProfileConfiguration(UniqueDropKcConfig.GROUP, key);
+		Map<Integer, int[]> map = parseHistory(json);
+		historyCache.put(key, map);
+		return map;
 	}
 
 	private void saveSourceMap(LootRecordType type, String sourceName, Map<Integer, int[]> map)
 	{
 		String key = historyKey(type, sourceName);
+		historyCache.put(key, map);
 		configManager.setRSProfileConfiguration(UniqueDropKcConfig.GROUP, key, gson.toJson(map));
 		addToIndex(key);
 	}
 
-	private void addToIndex(String historyKey)
+	private List<String> loadIndex()
 	{
-		String indexJson = configManager.getRSProfileConfiguration(UniqueDropKcConfig.GROUP, "index");
-		List<String> index;
-		if (indexJson == null || indexJson.isEmpty())
+		if (indexCache != null)
 		{
-			index = new ArrayList<>();
-		}
-		else
-		{
-			index = gson.fromJson(indexJson, INDEX_TYPE);
-			if (index == null)
-			{
-				index = new ArrayList<>();
-			}
+			return indexCache;
 		}
 
+		String indexJson = configManager.getRSProfileConfiguration(UniqueDropKcConfig.GROUP, "index");
+		indexCache = parseIndex(indexJson);
+		return indexCache;
+	}
+
+	private void addToIndex(String historyKey)
+	{
+		List<String> index = loadIndex();
 		Set<String> seen = new HashSet<>(index);
 		if (seen.add(historyKey))
 		{
 			index.add(historyKey);
+			indexCache = index;
 			configManager.setRSProfileConfiguration(UniqueDropKcConfig.GROUP, "index", gson.toJson(index));
+		}
+	}
+
+	private Map<Integer, int[]> parseHistory(String json)
+	{
+		if (json == null || json.isEmpty())
+		{
+			return new LinkedHashMap<>();
+		}
+		try
+		{
+			Map<Integer, int[]> map = gson.fromJson(json, HISTORY_TYPE);
+			return map == null ? new LinkedHashMap<>() : new LinkedHashMap<>(map);
+		}
+		catch (JsonParseException | NumberFormatException | ClassCastException ex)
+		{
+			log.warn("Corrupt Unique Drop KC history JSON; ignoring", ex);
+			return new LinkedHashMap<>();
+		}
+	}
+
+	private List<String> parseIndex(String json)
+	{
+		if (json == null || json.isEmpty())
+		{
+			return new ArrayList<>();
+		}
+		try
+		{
+			List<String> index = gson.fromJson(json, INDEX_TYPE);
+			return index == null ? new ArrayList<>() : new ArrayList<>(index);
+		}
+		catch (JsonParseException | ClassCastException ex)
+		{
+			log.warn("Corrupt Unique Drop KC index JSON; ignoring", ex);
+			return new ArrayList<>();
 		}
 	}
 
@@ -183,7 +287,7 @@ class UniqueDropKcStore
 		return "hist_" + type.name() + "_" + sourceName;
 	}
 
-	private static String nameKey(int itemId)
+	static String nameKey(int itemId)
 	{
 		return "name_" + itemId;
 	}
