@@ -4,6 +4,8 @@ RuneLite plugin that records official killcounts when collection-log uniques dro
 
 Example tooltip: `Last received at 412, 400, 224 kc` (up to 5 entries, newest first).
 
+History is stored per RuneLite profile via the config system.
+
 ## Requirements
 
 - **Loot Tracker** enabled (`LootReceived`)
@@ -15,13 +17,41 @@ Example tooltip: `Last received at 412, 400, 224 kc` (up to 5 entries, newest fi
 - Items: collection-log item IDs only
 - Storage: at most 5 KCs per item per source (no backfill)
 
-## Build / sideload
+## Development (local RuneLite)
 
-```bash
-./gradlew build
+**Prerequisites:** JDK 11 (Eclipse Temurin), network access to `repo.runelite.net`.
+
+### Path A — Gradle `run` (recommended)
+
+```powershell
+cd C:\Git\unique-drop-kc
+.\gradlew run
 ```
 
-Load the jar from RuneLite’s sideloaded plugins folder (or use Plugin Hub external plugins).
+This starts RuneLite in developer mode with the plugin loaded. Enable **Loot Tracker** and **Chat Commands**, then enable **Unique Drop KC** in the plugin list (wrench icon) and turn on **Show side panel**.
+
+**Debug testing (optional):** In plugin config, open the **Debug** section, set unlock phrase to `ENABLE DEBUG`, enable **Debug mode**, then use `::udkc help` in-game.
+
+In IntelliJ, run the green triangle on the `run` task in `build.gradle`.
+
+### Path B — Sideload JAR
+
+```powershell
+.\gradlew build
+# or: .\gradlew shadowJar
+```
+
+Copy `build\libs\unique-drop-kc-1.0.0.jar` (or `unique-drop-kc-1.0.0-all.jar`) to:
+
+`%USERPROFILE%\.runelite\sideloaded-plugins\`
+
+Start RuneLite in **developer mode** so sideloaded plugins load.
+
+### Tests
+
+```powershell
+.\gradlew test
+```
 
 ## Manual test checklist
 
@@ -33,3 +63,7 @@ Load the jar from RuneLite’s sideloaded plugins folder (or use Plugin Hub exte
 6. Restart client → histories persist
 7. No official KC yet → no crash / no history until KC exists
 8. With Collection Log Luck enabled → clog overlay unchanged; this panel still works
+
+## Plugin Hub
+
+Distributed via [RuneLite Plugin Hub](https://github.com/runelite/plugin-hub). Source lives in this repository; the hub lists a manifest pointing at a specific commit.
