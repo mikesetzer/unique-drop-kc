@@ -1,6 +1,8 @@
 package com.elbaerk.uniquedropkc;
 
 import com.google.gson.Gson;
+import java.util.List;
+import net.runelite.api.ItemComposition;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.game.ItemManager;
 import net.runelite.http.api.loottracker.LootRecordType;
@@ -30,6 +32,9 @@ public class UniqueDropKcStoreTest
 
 	@Mock
 	private ItemManager itemManager;
+
+	@Mock
+	private ItemComposition itemComposition;
 
 	private UniqueDropKcStore store;
 
@@ -101,5 +106,65 @@ public class UniqueDropKcStoreTest
 
 		assertFalse(store.recordDrop(LootRecordType.NPC, "Zulrah", 12922, 100));
 		verify(configManager, never()).setRSProfileConfiguration(eq(UniqueDropKcConfig.GROUP), eq(key), anyString());
+	}
+
+	@Test
+	public void recordDebugDropWritesDebugKeysOnly()
+	{
+		String debugKey = UniqueDropKcStore.historyKey(LootRecordType.NPC, "Zulrah", true);
+		when(configManager.getRSProfileConfiguration(UniqueDropKcConfig.GROUP, debugKey)).thenReturn(null);
+		when(configManager.getRSProfileConfiguration(UniqueDropKcConfig.GROUP, "debug_index")).thenReturn(null);
+
+		assertTrue(store.recordDebugDrop(LootRecordType.NPC, "Zulrah", 12922, 100));
+
+		verify(configManager).setRSProfileConfiguration(eq(UniqueDropKcConfig.GROUP), eq(debugKey), anyString());
+		verify(configManager).setRSProfileConfiguration(eq(UniqueDropKcConfig.GROUP), eq("debug_index"), anyString());
+		verify(configManager, never()).setRSProfileConfiguration(eq(UniqueDropKcConfig.GROUP), eq("index"), anyString());
+		verify(configManager, never()).setRSProfileConfiguration(
+			eq(UniqueDropKcConfig.GROUP),
+			eq(UniqueDropKcStore.historyKey(LootRecordType.NPC, "Zulrah", false)),
+			anyString());
+	}
+
+	@Test
+	public void clearDebugUnsetsDebugKeysOnly()
+	{
+		String debugKey = UniqueDropKcStore.historyKey(LootRecordType.NPC, "Zulrah", true);
+		when(configManager.getRSProfileConfiguration(UniqueDropKcConfig.GROUP, "debug_index"))
+			.thenReturn("[\"" + debugKey + "\"]");
+
+		store.clearDebug();
+
+		verify(configManager).unsetRSProfileConfiguration(UniqueDropKcConfig.GROUP, debugKey);
+		verify(configManager).unsetRSProfileConfiguration(UniqueDropKcConfig.GROUP, "debug_index");
+		verify(configManager, never()).unsetRSProfileConfiguration(eq(UniqueDropKcConfig.GROUP), eq("index"));
+	}
+
+	@Test
+	public void listAllMergesRealAndDebugForSameItem()
+	{
+		String realKey = UniqueDropKcStore.historyKey(LootRecordType.NPC, "Zulrah", false);
+		String debugKey = UniqueDropKcStore.historyKey(LootRecordType.NPC, "Zulrah", true);
+		when(configManager.getRSProfileConfiguration(UniqueDropKcConfig.GROUP, "index"))
+			.thenReturn("[\"" + realKey + "\"]");
+		when(configManager.getRSProfileConfiguration(UniqueDropKcConfig.GROUP, "debug_index"))
+			.thenReturn("[\"" + debugKey + "\"]");
+		when(configManager.getRSProfileConfiguration(UniqueDropKcConfig.GROUP, realKey))
+			.thenReturn("{\"12922\":[50]}");
+		when(configManager.getRSProfileConfiguration(UniqueDropKcConfig.GROUP, debugKey))
+			.thenReturn("{\"12922\":[100]}");
+		when(itemManager.getItemComposition(12922)).thenReturn(itemComposition);
+		when(itemComposition.getName()).thenReturn("Tanzanite fang");
+
+		List<UniqueDropRecord> withoutDebug = store.listAll(false);
+		assertEquals(1, withoutDebug.size());
+		assertArrayEquals(new int[]{50}, withoutDebug.get(0).getReceivedAtKcs());
+		assertEquals(0, withoutDebug.get(0).getDebugReceivedAtKcs().length);
+
+		store.clearCache();
+		List<UniqueDropRecord> withDebug = store.listAll(true);
+		assertEquals(1, withDebug.size());
+		assertArrayEquals(new int[]{50}, withDebug.get(0).getReceivedAtKcs());
+		assertArrayEquals(new int[]{100}, withDebug.get(0).getDebugReceivedAtKcs());
 	}
 }

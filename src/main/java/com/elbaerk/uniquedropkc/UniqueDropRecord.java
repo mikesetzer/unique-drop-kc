@@ -11,4 +11,5 @@ class UniqueDropRecord
 	int itemId;
 	String itemName;
 	int[] receivedAtKcs;
+	int[] debugReceivedAtKcs;
 }

@@ -8,6 +8,7 @@ import java.util.HashSet;
 import java.util.Set;
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
+import net.runelite.api.events.CommandExecuted;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
@@ -30,6 +31,9 @@ import net.runelite.http.api.loottracker.LootRecordType;
 )
 public class UniqueDropKcPlugin extends Plugin
 {
+	static final String DEBUG_INSTRUCTIONS_TEXT =
+		"::udkc help | ::udkc add <source> <itemId> <kc> | ::udkc clear — example: ::udkc add Zulrah 12922 100";
+
 	private static final Set<String> RAID_EVENTS = ImmutableSet.of(
 		"Chambers of Xeric",
 		"Theatre of Blood",
@@ -55,7 +59,11 @@ public class UniqueDropKcPlugin extends Plugin
 	@Inject
 	private UniqueDropKcPanel panel;
 
+	@Inject
+	private UniqueDropKcDebugCommands debugCommands;
+
 	private NavigationButton navButton;
+	private boolean debugWasActive;
 
 	@Provides
 	UniqueDropKcConfig provideConfig(ConfigManager configManager)
@@ -81,6 +89,8 @@ public class UniqueDropKcPlugin extends Plugin
 		}
 
 		store.purgeLegacyItemNames();
+		debugWasActive = isDebugActive();
+		syncDebugInstructions(debugWasActive);
 		refreshPanel();
 	}
 
@@ -100,9 +110,28 @@ public class UniqueDropKcPlugin extends Plugin
 	}
 
 	@Subscribe
+	public void onCommandExecuted(CommandExecuted event)
+	{
+		if (!"udkc".equalsIgnoreCase(event.getCommand()))
+		{
+			return;
+		}
+		if (!isDebugActive())
+		{
+			return;
+		}
+		if (debugCommands.handle(event.getArguments()))
+		{
+			refreshPanel();
+		}
+	}
+
+	@Subscribe
 	public void onProfileChanged(ProfileChanged event)
 	{
 		store.clearCache();
+		debugWasActive = isDebugActive();
+		syncDebugInstructions(debugWasActive);
 		refreshPanel();
 	}
 
@@ -111,6 +140,8 @@ public class UniqueDropKcPlugin extends Plugin
 	{
 		// Different OSRS accounts share a RuneLite profile but have separate RS-profile config.
 		store.clearCache();
+		debugWasActive = isDebugActive();
+		syncDebugInstructions(debugWasActive);
 		refreshPanel();
 	}
 
@@ -129,6 +160,18 @@ public class UniqueDropKcPlugin extends Plugin
 			{
 				clientToolbar.addNavigation(navButton);
 			}
+			return;
+		}
+
+		if (UniqueDropKcConfig.KEY_DEBUG_INSTRUCTIONS.equals(event.getKey()))
+		{
+			return;
+		}
+
+		if (UniqueDropKcConfig.KEY_UNLOCK.equals(event.getKey())
+			|| UniqueDropKcConfig.KEY_DEBUG_MODE.equals(event.getKey()))
+		{
+			onDebugConfigChanged();
 		}
 	}
 
@@ -182,6 +225,34 @@ public class UniqueDropKcPlugin extends Plugin
 		return type == LootRecordType.EVENT && name != null && RAID_EVENTS.contains(name);
 	}
 
+	boolean isDebugActive()
+	{
+		return UniqueDropKcConfig.UNLOCK_PHRASE.equals(config.debugUnlockPhrase()) && config.debugMode();
+	}
+
+	private void onDebugConfigChanged()
+	{
+		boolean active = isDebugActive();
+		if (debugWasActive && !active)
+		{
+			store.clearDebug();
+		}
+		debugWasActive = active;
+		syncDebugInstructions(active);
+		refreshPanel();
+	}
+
+	private void syncDebugInstructions(boolean active)
+	{
+		String desired = active ? DEBUG_INSTRUCTIONS_TEXT : "";
+		String current = config.debugInstructions();
+		if (desired.equals(current == null ? "" : current))
+		{
+			return;
+		}
+		configManager.setConfiguration(UniqueDropKcConfig.GROUP, UniqueDropKcConfig.KEY_DEBUG_INSTRUCTIONS, desired);
+	}
+
 	private Integer getOfficialKc(String sourceName)
 	{
 		if (sourceName == null)
@@ -193,6 +264,7 @@ public class UniqueDropKcPlugin extends Plugin
 
 	private void refreshPanel()
 	{
-		SwingUtilities.invokeLater(() -> panel.rebuild(store.listAll()));
+		boolean includeDebug = isDebugActive();
+		SwingUtilities.invokeLater(() -> panel.rebuild(store.listAll(includeDebug)));
 	}
 }

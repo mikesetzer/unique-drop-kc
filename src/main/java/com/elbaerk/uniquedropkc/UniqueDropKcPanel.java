@@ -139,14 +139,20 @@ class UniqueDropKcPanel extends PluginPanel
 		icon.setHorizontalAlignment(SwingConstants.CENTER);
 		icon.setVerticalAlignment(SwingConstants.CENTER);
 
-		String tip = UniqueDropKcStore.formatTooltipLine(record.getReceivedAtKcs());
-		String html = "<html>" + escapeHtml(record.getItemName());
-		if (tip != null)
+		StringBuilder html = new StringBuilder("<html>");
+		html.append(escapeHtml(record.getItemName()));
+		String realTip = UniqueDropKcStore.formatTooltipLine(record.getReceivedAtKcs());
+		if (realTip != null)
 		{
-			html += "<br>" + escapeHtml(tip);
+			html.append("<br>").append(escapeHtml(realTip));
 		}
-		html += "</html>";
-		icon.setToolTipText(html);
+		String debugTip = UniqueDropKcStore.formatTooltipLine(record.getDebugReceivedAtKcs());
+		if (debugTip != null)
+		{
+			html.append("<br>").append(escapeHtml("[debug] " + debugTip));
+		}
+		html.append("</html>");
+		icon.setToolTipText(html.toString());
 
 		AsyncBufferedImage image = itemManager.getImage(record.getItemId(), 1, false);
 		image.addTo(icon);

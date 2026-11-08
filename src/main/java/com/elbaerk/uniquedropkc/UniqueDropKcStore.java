@@ -24,6 +24,11 @@ class UniqueDropKcStore
 {
 	static final int MAX_ENTRIES = 5;
 
+	private static final String INDEX_KEY = "index";
+	private static final String DEBUG_INDEX_KEY = "debug_index";
+	private static final String HIST_PREFIX = "hist_";
+	private static final String DEBUG_HIST_PREFIX = "debug_hist_";
+
 	private static final Type HISTORY_TYPE = new TypeToken<Map<Integer, int[]>>()
 	{
 	}.getType();
@@ -38,6 +43,7 @@ class UniqueDropKcStore
 
 	private final Object lock = new Object();
 	private List<String> indexCache;
+	private List<String> debugIndexCache;
 	private final Map<String, Map<Integer, int[]>> historyCache = new HashMap<>();
 
 	@Inject
@@ -56,6 +62,7 @@ class UniqueDropKcStore
 		synchronized (lock)
 		{
 			indexCache = null;
+			debugIndexCache = null;
 			historyCache.clear();
 		}
 	}
@@ -68,14 +75,14 @@ class UniqueDropKcStore
 	{
 		synchronized (lock)
 		{
-			for (String sourceKey : loadIndex())
+			for (String sourceKey : loadIndex(false))
 			{
 				ParsedSource parsed = parseSourceKey(sourceKey);
 				if (parsed == null)
 				{
 					continue;
 				}
-				for (Integer itemId : loadSourceMap(parsed.type, parsed.name).keySet())
+				for (Integer itemId : loadSourceMap(parsed.type, parsed.name, false).keySet())
 				{
 					configManager.unsetRSProfileConfiguration(UniqueDropKcConfig.GROUP, nameKey(itemId));
 				}
@@ -88,48 +95,50 @@ class UniqueDropKcStore
 	 */
 	boolean recordDrop(LootRecordType type, String sourceName, int itemId, int kc)
 	{
-		synchronized (lock)
-		{
-			Map<Integer, int[]> map = loadSourceMap(type, sourceName);
-			int[] existing = map.get(itemId);
-			int[] updated = prepend(existing, kc);
-			if (updated == existing)
-			{
-				return false;
-			}
-
-			map.put(itemId, updated);
-			saveSourceMap(type, sourceName, map);
-			return true;
-		}
+		return record(type, sourceName, itemId, kc, false);
 	}
 
-	List<UniqueDropRecord> listAll()
+	/**
+	 * Records into the debug store only. Never writes real hist/index keys.
+	 *
+	 * @return true if a new KC stamp was recorded
+	 */
+	boolean recordDebugDrop(LootRecordType type, String sourceName, int itemId, int kc)
+	{
+		return record(type, sourceName, itemId, kc, true);
+	}
+
+	/**
+	 * Deletes all debug_* RS-profile keys for the current account. Real data is untouched.
+	 */
+	void clearDebug()
 	{
 		synchronized (lock)
 		{
-			List<UniqueDropRecord> out = new ArrayList<>();
-			List<String> index = loadIndex();
-			if (index.isEmpty())
+			List<String> index = new ArrayList<>(loadIndex(true));
+			for (String key : index)
 			{
-				return out;
+				configManager.unsetRSProfileConfiguration(UniqueDropKcConfig.GROUP, key);
+				historyCache.remove(key);
+			}
+			configManager.unsetRSProfileConfiguration(UniqueDropKcConfig.GROUP, DEBUG_INDEX_KEY);
+			debugIndexCache = null;
+		}
+	}
+
+	List<UniqueDropRecord> listAll(boolean includeDebug)
+	{
+		synchronized (lock)
+		{
+			Map<String, UniqueDropRecord> merged = new LinkedHashMap<>();
+
+			collectInto(merged, false);
+			if (includeDebug)
+			{
+				collectInto(merged, true);
 			}
 
-			for (String sourceKey : index)
-			{
-				ParsedSource parsed = parseSourceKey(sourceKey);
-				if (parsed == null)
-				{
-					continue;
-				}
-				Map<Integer, int[]> map = loadSourceMap(parsed.type, parsed.name);
-				for (Map.Entry<Integer, int[]> e : map.entrySet())
-				{
-					int itemId = e.getKey();
-					out.add(new UniqueDropRecord(parsed.type, parsed.name, itemId, resolveItemName(itemId), e.getValue()));
-				}
-			}
-
+			List<UniqueDropRecord> out = new ArrayList<>(merged.values());
 			out.sort((a, b) ->
 			{
 				int c = a.getSourceName().compareToIgnoreCase(b.getSourceName());
@@ -182,6 +191,70 @@ class UniqueDropKcStore
 		return sb.toString();
 	}
 
+	private boolean record(LootRecordType type, String sourceName, int itemId, int kc, boolean debug)
+	{
+		synchronized (lock)
+		{
+			Map<Integer, int[]> map = loadSourceMap(type, sourceName, debug);
+			int[] existing = map.get(itemId);
+			int[] updated = prepend(existing, kc);
+			if (updated == existing)
+			{
+				return false;
+			}
+
+			map.put(itemId, updated);
+			saveSourceMap(type, sourceName, map, debug);
+			return true;
+		}
+	}
+
+	private void collectInto(Map<String, UniqueDropRecord> merged, boolean debug)
+	{
+		for (String sourceKey : loadIndex(debug))
+		{
+			ParsedSource parsed = parseSourceKey(sourceKey);
+			if (parsed == null)
+			{
+				continue;
+			}
+			Map<Integer, int[]> map = loadSourceMap(parsed.type, parsed.name, debug);
+			for (Map.Entry<Integer, int[]> e : map.entrySet())
+			{
+				int itemId = e.getKey();
+				String mergeKey = parsed.name.toLowerCase() + '\0' + itemId;
+				UniqueDropRecord existing = merged.get(mergeKey);
+				if (existing == null)
+				{
+					int[] real = debug ? new int[0] : e.getValue();
+					int[] dbg = debug ? e.getValue() : new int[0];
+					merged.put(mergeKey, new UniqueDropRecord(
+						parsed.type, parsed.name, itemId, resolveItemName(itemId), real, dbg));
+				}
+				else if (debug)
+				{
+					merged.put(mergeKey, new UniqueDropRecord(
+						existing.getType(),
+						existing.getSourceName(),
+						existing.getItemId(),
+						existing.getItemName(),
+						existing.getReceivedAtKcs(),
+						e.getValue()));
+				}
+				else
+				{
+					merged.put(mergeKey, new UniqueDropRecord(
+						existing.getType(),
+						existing.getSourceName(),
+						existing.getItemId(),
+						existing.getItemName(),
+						e.getValue(),
+						existing.getDebugReceivedAtKcs()));
+				}
+			}
+		}
+	}
+
 	private String resolveItemName(int itemId)
 	{
 		try
@@ -199,9 +272,9 @@ class UniqueDropKcStore
 		return "Item " + itemId;
 	}
 
-	private Map<Integer, int[]> loadSourceMap(LootRecordType type, String sourceName)
+	private Map<Integer, int[]> loadSourceMap(LootRecordType type, String sourceName, boolean debug)
 	{
-		String key = historyKey(type, sourceName);
+		String key = historyKey(type, sourceName, debug);
 		Map<Integer, int[]> cached = historyCache.get(key);
 		if (cached != null)
 		{
@@ -214,35 +287,53 @@ class UniqueDropKcStore
 		return map;
 	}
 
-	private void saveSourceMap(LootRecordType type, String sourceName, Map<Integer, int[]> map)
+	private void saveSourceMap(LootRecordType type, String sourceName, Map<Integer, int[]> map, boolean debug)
 	{
-		String key = historyKey(type, sourceName);
+		String key = historyKey(type, sourceName, debug);
 		historyCache.put(key, map);
 		configManager.setRSProfileConfiguration(UniqueDropKcConfig.GROUP, key, gson.toJson(map));
-		addToIndex(key);
+		addToIndex(key, debug);
 	}
 
-	private List<String> loadIndex()
+	private List<String> loadIndex(boolean debug)
 	{
+		if (debug)
+		{
+			if (debugIndexCache != null)
+			{
+				return debugIndexCache;
+			}
+			String indexJson = configManager.getRSProfileConfiguration(UniqueDropKcConfig.GROUP, DEBUG_INDEX_KEY);
+			debugIndexCache = parseIndex(indexJson);
+			return debugIndexCache;
+		}
+
 		if (indexCache != null)
 		{
 			return indexCache;
 		}
-
-		String indexJson = configManager.getRSProfileConfiguration(UniqueDropKcConfig.GROUP, "index");
+		String indexJson = configManager.getRSProfileConfiguration(UniqueDropKcConfig.GROUP, INDEX_KEY);
 		indexCache = parseIndex(indexJson);
 		return indexCache;
 	}
 
-	private void addToIndex(String historyKey)
+	private void addToIndex(String historyKey, boolean debug)
 	{
-		List<String> index = loadIndex();
+		List<String> index = loadIndex(debug);
 		Set<String> seen = new HashSet<>(index);
 		if (seen.add(historyKey))
 		{
 			index.add(historyKey);
-			indexCache = index;
-			configManager.setRSProfileConfiguration(UniqueDropKcConfig.GROUP, "index", gson.toJson(index));
+			if (debug)
+			{
+				debugIndexCache = index;
+				configManager.setRSProfileConfiguration(UniqueDropKcConfig.GROUP, DEBUG_INDEX_KEY, gson.toJson(index));
+			}
+			else
+			{
+				indexCache = index;
+				configManager.setRSProfileConfiguration(UniqueDropKcConfig.GROUP, INDEX_KEY, gson.toJson(index));
+			}
 		}
 	}
 
@@ -284,7 +375,12 @@ class UniqueDropKcStore
 
 	static String historyKey(LootRecordType type, String sourceName)
 	{
-		return "hist_" + type.name() + "_" + sourceName;
+		return historyKey(type, sourceName, false);
+	}
+
+	static String historyKey(LootRecordType type, String sourceName, boolean debug)
+	{
+		return (debug ? DEBUG_HIST_PREFIX : HIST_PREFIX) + type.name() + "_" + sourceName;
 	}
 
 	static String nameKey(int itemId)
@@ -294,11 +390,25 @@ class UniqueDropKcStore
 
 	private static ParsedSource parseSourceKey(String historyKey)
 	{
-		if (historyKey == null || !historyKey.startsWith("hist_"))
+		if (historyKey == null)
 		{
 			return null;
 		}
-		String rest = historyKey.substring("hist_".length());
+
+		String rest;
+		if (historyKey.startsWith(DEBUG_HIST_PREFIX))
+		{
+			rest = historyKey.substring(DEBUG_HIST_PREFIX.length());
+		}
+		else if (historyKey.startsWith(HIST_PREFIX))
+		{
+			rest = historyKey.substring(HIST_PREFIX.length());
+		}
+		else
+		{
+			return null;
+		}
+
 		int us = rest.indexOf('_');
 		if (us <= 0)
 		{
