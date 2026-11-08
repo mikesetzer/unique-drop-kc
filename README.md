@@ -68,11 +68,4 @@ Start RuneLite in **developer mode** so sideloaded plugins load.
 
 Distributed via [RuneLite Plugin Hub](https://github.com/runelite/plugin-hub). Source lives in this repository; the hub lists a manifest pointing at a specific commit.
 
-**Submit / update:** Fork `runelite/plugin-hub`, push branch `unique-drop-kc` with `plugins/unique-drop-kc` pointing at the latest commit on this repo, then open a PR to `runelite/plugin-hub` `master`. Manifest pins:
-
-```text
-repository=https://github.com/mikesetzer/unique-drop-kc.git
-commit=17c615c58fdbed02b8c24e16729070c9b6dbb076
-```
-
-(Update `commit=` after each plugin release.)
+**Submit / update:** Fork `runelite/plugin-hub`, push branch `unique-drop-kc` (manifest already prepared in your local `C:\Git\plugin-hub` clone), then open a PR to `runelite/plugin-hub` `master`. Set `commit=` in `plugins/unique-drop-kc` to the full 40-character hash of the release commit on this repo.
