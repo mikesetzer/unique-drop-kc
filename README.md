@@ -19,7 +19,7 @@ History is stored per RuneLite profile via the config system.
 
 ## Development (local RuneLite)
 
-**Prerequisites:** JDK 11 (Eclipse Temurin), network access to `repo.runelite.net`.
+**Prerequisites:** JDK 11+ (Eclipse Temurin 11 or 17), network access to `repo.runelite.net`. If `gradle` uses Java 8 by default, set `JAVA_HOME` to your JDK 11+ install before building (for example `C:\Program Files\Eclipse Adoptium\jdk-17.0.21.9-hotspot` on Windows).
 
 ### Path A — Gradle `run` (recommended)
 
